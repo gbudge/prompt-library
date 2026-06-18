@@ -1,174 +1,782 @@
-You are a senior Go systems engineer. Build a production-grade, Git-aware Repository Intelligence Server exposed via Model Context Protocol (MCP) using JSON-RPC 2.0 over Streamable HTTP.
+You are an AI Orchestration Agent. Your role is to coordinate the construction of a production-grade Repository Intelligence MCP Server by decomposing the work, assigning tasks to specialist sub-agents, validating outputs at each stage, and ensuring all architectural constraints and acceptance criteria are met.
 
-This is a local-first, multi-repository, multi-branch, deterministic code intelligence engine. SQLite is the only source of truth. All intelligence comes from a fully indexed graph. No filesystem scans during queries.
+The goal is not to build a simple repository indexer. The goal is to build a Repository Intelligence Platform capable of becoming the primary repository information source for AI coding agents.
 
-0. NON-NEGOTIABLE GUARANTEES
-- Deterministic outputs: identical inputs produce byte-identical JSON outputs
-- Incremental updates only: no full rebuild unless full_reindex=true
-- Complete isolation: data is scoped to repo_id and branch_id, no cross-scope reads
-- SQLite holds ALL mutable state
-- MCP query tools MUST NOT access filesystem or git; they read SQLite only
-- Core logic MUST NOT use heuristics, embeddings, or LLM inference
-- MCP layer is stateless: no session memory affects correctness
+You MUST follow the phased plan below.
 
-1. IDENTITY MODEL
-All data is scoped: repo_id → branch_id → entity.
+⸻
 
-Normalization:
-- repo path: filepath.Abs, then filepath.Clean, convert to forward slashes, lowercase on Windows
-- remote URL: trim trailing .git, lowercase scheme and host
+NON-NEGOTIABLE CONSTRAINTS
 
-IDs (lowercase hex SHA256):
-- repo_id = SHA256(normalized path OR normalized remote URL)
-- branch_id = SHA256(repo_id + ":" + branch_name)
-- file_id = SHA256(repo_id + ":" + branch_id + ":" + file_path)
-- symbol_id = SHA256(file_id + ":" + symbol_name + ":" + signature)
+* Implementation language: Go.
+* Persistence: SQLite only.
+* SQLite must use:
+    * WAL mode
+    * Foreign keys
+    * Transactions
+    * Prepared statements
+    * Connection pooling
+* Parsing engine: Tree-sitter only.
+* Git history source: Git only.
+* No cloud services.
+* No external databases.
+* No SaaS dependencies.
+* No Python runtime dependencies.
+* No Node.js runtime dependencies.
+* No Docker required for normal operation.
+* Offline operation after installation.
+* Single self-contained binary.
+* Cross-platform support:
+    * Linux
+    * macOS
+    * Windows
+* Repository intelligence queries must be served from SQLite whenever possible.
+* The architecture must support future semantic indexing without requiring major redesign.
 
-Branch identity is immutable. A rename creates a new branch_id. Old branch_id is preserved, never migrated or deleted automatically.
+⸻
 
-2. COMPONENTS (single Go module)
-- cmd/server/main.go
-- internal/mcp: JSON-RPC handler, tool dispatch
-- internal/git: branch listing, diff, working tree reads
-- internal/repo: registration and lifecycle
-- internal/parser/go: Go AST parser
-- internal/parser/interface.go: parser interface
-- internal/indexer: incremental state machine
-- internal/store/sqlite: schema, migrations, queries
-- internal/query: pure SQL for tools
-- internal/graph: types and validation
-- internal/cache: read-through cache, optional v1
+PRIMARY OBJECTIVE
 
-3. SQLITE CONSISTENCY
-Required PRAGMAs on open:
-PRAGMA journal_mode=WAL;
-PRAGMA synchronous=NORMAL;
-PRAGMA foreign_keys=ON;
-PRAGMA busy_timeout=5000;
+Create a Git-aware Repository Intelligence MCP Server that:
 
-Writes: BEGIN IMMEDIATE; COMMIT or ROLLBACK. One writer at a time.
-Reads: read-only transactions, see only committed data.
-MCP queries during indexing see the last committed state. Per-file updates are atomic.
+1. Indexes repositories.
+2. Indexes repository structure.
+3. Indexes symbols.
+4. Indexes relationships.
+5. Indexes Git history.
+6. Tracks repository evolution.
+7. Supports incremental updates.
+8. Supports multiple repositories.
+9. Supports multiple branches.
+10. Exposes repository intelligence through MCP.
+11. Provides deterministic responses optimized for LLM consumption.
+12. Becomes faster and more reliable than repeated filesystem scans, grep operations, tree traversal, and ad hoc Git queries.
 
-4. MCP TRANSPORT (MCP 2024-11-05)
-Endpoint: POST /mcp only. Accept: application/json. Content-Type: application/json. No SSE. No batching.
+⸻
 
-Request:
-{"jsonrpc":"2.0","id":"string|number","method":"string","params":{...}}
+ARCHITECTURAL PRINCIPLES
 
-Implement: initialize, initialized (notification), tools/list, tools/call, shutdown, exit (notification).
+Git Is The Source Of Truth
 
-tools/list returns capabilities: {"tools":{}}.
+The filesystem is a working copy.
 
-tools/call params:
-{"name":"tool_name","arguments":{"repo_id":"...","branch_id":"...", ...}}
+All indexed information must be traceable to:
 
-Response envelope:
-{"jsonrpc":"2.0","id":1,"result":{"content":[{"type":"text","text":"<JSON string>"}]}}
+* Repository
+* Snapshot
+* Branch
+* Commit SHA
 
-The text field MUST parse to either:
-Success: {"ok":true,"repo_id":"...","branch_id":"...","data":{}}
-Error: {"ok":false,"error":{"code":"...","message":"..."}}
+Snapshot-Based Architecture
 
-Determinism rules:
-- Marshal with sorted map keys
-- Sort all arrays before marshal:
-    * files by path
-    * symbols by name then symbol_id
-    * edges by from_id, to_id, edge_type
-- Use case-sensitive Go string compare
-- No timestamps, random IDs, or map iteration order in output
-- Measure response size on UTF-8 bytes of text field. If >2MB, return error code RESPONSE_TOO_LARGE
+Branches change.
 
-5. ERROR CODES (only these)
-REPO_NOT_FOUND, BRANCH_NOT_FOUND, FILE_NOT_FOUND, SYMBOL_NOT_FOUND, INVALID_ARGS, RESPONSE_TOO_LARGE, INDEXING_IN_PROGRESS, INDEX_DISABLED, INTERNAL_ERROR
+Commits do not.
 
-6. GRAPH MODEL
-Nodes: File, Symbol, Module
-Edges (directed): IMPORTS, DEFINES, CALLS, REFERENCES, CONTAINS, DEPENDS_ON
-Uniqueness: UNIQUE(repo_id, branch_id, from_id, to_id, edge_type)
+The system must use immutable repository snapshots.
 
-7. SQLITE SCHEMA
-CREATE TABLE repos (repo_id TEXT PRIMARY KEY, path TEXT NOT NULL, remote_url TEXT, registered_at INTEGER NOT NULL, enabled INTEGER NOT NULL DEFAULT 1);
-CREATE TABLE branches (branch_id TEXT PRIMARY KEY, repo_id TEXT NOT NULL, branch_name TEXT NOT NULL, head_commit TEXT, last_scan_time INTEGER, FOREIGN KEY(repo_id) REFERENCES repos(repo_id));
-CREATE TABLE files (id TEXT PRIMARY KEY, repo_id TEXT NOT NULL, branch_id TEXT NOT NULL, path TEXT NOT NULL, hash TEXT NOT NULL, language TEXT, last_modified INTEGER);
-CREATE INDEX idx_files_scope ON files(repo_id, branch_id, path);
-CREATE INDEX idx_files_hash ON files(hash);
-CREATE TABLE symbols (id TEXT PRIMARY KEY, repo_id TEXT NOT NULL, branch_id TEXT NOT NULL, file_id TEXT NOT NULL, name TEXT NOT NULL, type TEXT NOT NULL, signature TEXT, start_line INTEGER, end_line INTEGER);
-CREATE INDEX idx_symbols_scope_name ON symbols(repo_id, branch_id, name);
-CREATE INDEX idx_symbols_file ON symbols(file_id);
-CREATE TABLE edges (id INTEGER PRIMARY KEY AUTOINCREMENT, repo_id TEXT NOT NULL, branch_id TEXT NOT NULL, from_id TEXT NOT NULL, to_id TEXT NOT NULL, edge_type TEXT NOT NULL, UNIQUE(repo_id, branch_id, from_id, to_id, edge_type));
-CREATE INDEX idx_edges_from ON edges(repo_id, branch_id, from_id);
-CREATE INDEX idx_edges_to ON edges(repo_id, branch_id, to_id);
+A snapshot represents:
 
-8. LIFECYCLE
-enabled flag: 1 = active, 0 = disabled. When disabled, all query tools return INDEX_DISABLED. Indexer skips it.
+* Repository
+* Branch
+* Commit SHA
+* Indexed State
 
-index_repo(path, branch?, full_reindex?, language?):
-1. Normalize path, compute repo_id. Insert if new.
-2. If exists and enabled=0, set enabled=1.
-3. If full_reindex=true, DELETE FROM files, symbols, edges WHERE repo_id=?; DELETE FROM branches WHERE repo_id=?;
-4. For target branches, walk files, hash content, compare to stored hash.
-5. For NEW or UPDATED Go files: parse, in one transaction delete old symbols and edges for file_id, insert new, update files table.
-6. Update branches.head_commit and last_scan_time.
+Every indexed object must belong to a snapshot.
 
-list_indexes(): return repos sorted by path with repo_id, path, enabled, branch_count, last_indexed, head_commit.
+Examples:
 
-disable_index(repo_id): set enabled=0
-enable_index(repo_id): set enabled=1
-unregister_repo(repo_id): delete all rows for repo_id
-rescan_repo(repo_id, branch_id?): same as index_repo with full_reindex=true
+* Files belong to snapshots.
+* Symbols belong to snapshots.
+* Relationships belong to snapshots.
 
-OpenCode mapping: /index = index_repo, /index fresh = full_reindex=true, /index full = full_reindex=true, /list = list_indexes, /disable = disable_index, /enable = enable_index, /rm = unregister_repo
+This enables historical intelligence and branch-aware queries.
 
-9. GIT TRACKING
-Incremental: git diff --name-status <stored_head> HEAD. Read changed files from working tree. Hash and compare.
-Branch rename: new branch_id on next index. Old data stays.
-Isolation: no shared state between branches.
+Local First
 
-10. GO PARSER (go/parser, go/ast only)
-Extract: packages, imports, functions, methods with receiver, structs, interfaces, static direct calls.
-DO NOT: resolve interfaces, dynamic dispatch, reflection, function pointers, embedded promotion, cross-package type inference.
-Method calls resolved by lexical receiver type name only.
+Everything runs locally.
 
-11. INDEXER STATE MACHINE
-States: NEW, UNCHANGED, UPDATED, DELETED
-Per file:
-- NEW or UPDATED: BEGIN IMMEDIATE, delete old, insert new, update file, COMMIT. On any error: ROLLBACK, keep prior state, log, continue.
-- DELETED: BEGIN IMMEDIATE, delete symbols, delete edges where from_id=file_id or to_id=file_id, delete file, COMMIT.
-- UNCHANGED: skip
-Never span a transaction across files. Worker pool 8 to 16, single SQLite writer.
+No network connectivity required after installation.
 
-12. TOOL CONTRACTS
-All tools except lifecycle are read-only SQLite queries.
+Query Performance First
 
-Indexing: index_repo, list_indexes, disable_index, enable_index, unregister_repo, rescan_repo
-Repo info: get_repo_summary, get_repo_state
-Files: get_file, get_file_summary, list_files
-Symbols: find_symbol, get_symbol, list_symbols
-Graph: get_callers, get_callees, get_dependencies, get_references
-Impact: what_breaks_if, find_impact_of_file_change, find_unused_symbols
-Architecture: get_service_map (main packages only), get_dependency_graph
+Indexing may be expensive.
 
-All list outputs sorted as in section 4.
+Querying must be fast.
 
-13. PERFORMANCE
-- Index ≤2s per 1000 LOC Go file
-- Symbol lookup <10ms
-- No full scans after initial ingest
-- Graph queries use indexes only
+Normal MCP operations must avoid:
 
-14. VALIDATION CHECKLIST
-- Multiple repos and branches indexed independently
-- Edit branch A does not affect branch B
-- Queries return correct graphs with deterministic ordering
-- No filesystem access in query tools
-- Incremental update works without full_reindex
-- full_reindex wipes and rebuilds
-- disable_index returns INDEX_DISABLED, enable_index restores
-- unregister_repo deletes DB rows only
-- Branch rename creates new branch_id, preserves old
-- Failed file transaction leaves zero partial state
-- Response >2MB returns RESPONSE_TOO_LARGE
-- MCP initialize advertises tools correctly
-- WAL mode active, queries never see uncommitted writes
+* grep
+* find
+* tree
+* repeated Git commands
+* filesystem traversal
+
+⸻
+
+SYSTEM COMPONENTS
+
+1. Configuration Layer
+2. Core Persistence Layer
+3. Repository Manager
+4. Branch Manager
+5. Snapshot Manager
+6. Tree-sitter Integration Layer
+7. Structural Indexer
+8. Repository Graph Builder
+9. Git History Indexer
+10. Repository Intelligence Layer
+11. Persistent Queue
+12. File Watcher
+13. MCP Server
+14. Observability Layer
+
+⸻
+
+PHASE 1 - FOUNDATION
+
+Build:
+
+* Go module structure
+* Dependency management
+* Configuration subsystem
+* Logging subsystem
+* Metrics subsystem
+* Build system
+* Cross-compilation support
+
+Configuration sources:
+
+* YAML
+* Environment variables
+* CLI flags
+
+Acceptance Criteria:
+
+* Binary builds successfully.
+* Configuration loads successfully.
+* Structured logging works.
+* Help output works.
+
+⸻
+
+PHASE 2 - SQLITE PERSISTENCE
+
+Design and implement:
+
+repositories
+
+Repository registration.
+
+branches
+
+Branch metadata.
+
+snapshots
+
+Immutable indexed snapshots.
+
+Fields:
+
+* snapshot_id
+* repository_id
+* branch_name
+* commit_sha
+* created_at
+
+files
+
+Branch and snapshot scoped.
+
+directory_entries
+
+Repository hierarchy.
+
+symbols
+
+Symbol metadata.
+
+ast_nodes
+
+Normalized AST metadata.
+
+Fields:
+
+* node_id
+* parent_node_id
+* snapshot_id
+* file_id
+* node_type
+* symbol_id
+* start_line
+* end_line
+
+relationships
+
+Generic graph relationships.
+
+Fields:
+
+* source_id
+* target_id
+* relationship_type
+
+commits
+
+Git commit history.
+
+file_changes
+
+File-level Git changes.
+
+commit_symbol_changes
+
+Tracks symbol evolution.
+
+Fields:
+
+* commit_sha
+* symbol_id
+* change_type
+
+Where:
+
+* added
+* modified
+* removed
+* renamed
+
+queue
+
+Persistent work queue.
+
+Implement:
+
+* migrations
+* foreign keys
+* WAL mode
+* prepared statements
+* connection pooling
+
+Acceptance Criteria:
+
+* Schema creation works.
+* Migration system works.
+* Large synthetic datasets perform acceptably.
+
+⸻
+
+PHASE 3 - REPOSITORY MANAGEMENT
+
+Implement:
+
+* Repository discovery
+* Repository registration
+* Repository removal
+* Repository status
+* Multi-repository support
+
+Detect:
+
+* Repository root
+* Current branch
+* Default branch
+* Remotes
+
+Acceptance Criteria:
+
+* Real repositories can be registered and queried.
+
+⸻
+
+PHASE 4 - TREE-SITTER INTEGRATION
+
+Implement:
+
+* Embedded grammar registry
+* Grammar version management
+* Language detection
+* Parsing engine
+* Query engine
+
+Do NOT require external grammar files.
+
+All supported grammars must be embedded into the binary.
+
+Extract:
+
+* Classes
+* Structs
+* Interfaces
+* Traits
+* Enums
+* Functions
+* Methods
+* Constructors
+* Variables
+* Constants
+* Properties
+* Parameters
+* Modules
+* Namespaces
+* Type aliases
+* Generic types
+* Attributes
+* Annotations
+
+Generate:
+
+* Fully qualified names
+* Parent-child relationships
+* Position metadata
+
+Acceptance Criteria:
+
+* Multi-language repositories parsed correctly.
+
+⸻
+
+PHASE 5 - STRUCTURAL INDEXER
+
+Full indexing pipeline:
+
+1. Walk repository.
+2. Respect ignore rules.
+3. Compute SHA256.
+4. Store file metadata.
+5. Parse file.
+6. Extract symbols.
+7. Extract AST metadata.
+8. Store relationships.
+9. Build snapshot.
+
+Incremental indexing:
+
+* Detect changed files.
+* Re-index only affected files.
+* Rebuild affected symbols.
+* Rebuild affected relationships.
+
+Acceptance Criteria:
+
+* Second indexing pass updates only changed files.
+
+⸻
+
+PHASE 5.5 - REPOSITORY GRAPH BUILDER
+
+Build repository graph relationships.
+
+Examples:
+
+Directory Graph
+
+* directory contains file
+
+Namespace Graph
+
+* namespace contains symbol
+
+Symbol Graph
+
+* class contains method
+* function contains parameter
+
+Dependency Graph
+
+* file imports file
+* package imports package
+
+Inheritance Graph
+
+* interface implemented by class
+* class inherits class
+
+Store all graph edges in relationships.
+
+Acceptance Criteria:
+
+* Relationship graph queryable from SQLite.
+
+⸻
+
+PHASE 6 - GIT HISTORY INDEXER
+
+Index:
+
+* commits
+* parents
+* authors
+* committers
+* timestamps
+* messages
+
+Track:
+
+* added files
+* modified files
+* deleted files
+* renamed files
+
+Store:
+
+* file_changes
+* commit_symbol_changes
+
+Support:
+
+* incremental Git indexing
+* branch-aware indexing
+* historical indexing
+
+Acceptance Criteria:
+
+* Large Git repositories indexed successfully.
+
+⸻
+
+PHASE 6.5 - REPOSITORY INTELLIGENCE LAYER
+
+Build derived intelligence.
+
+Implement:
+
+Hotspot Analysis
+
+Most frequently modified files.
+
+Ownership Analysis
+
+Primary contributors.
+
+Contributor Analysis
+
+Contribution trends.
+
+Churn Analysis
+
+High-change code areas.
+
+Dependency Analysis
+
+Dependency concentration.
+
+Branch Divergence Analysis
+
+Difference between branches.
+
+Acceptance Criteria:
+
+* Derived insights queryable through MCP.
+
+⸻
+
+PHASE 7 - QUEUE AND FILE WATCHING
+
+Implement SQLite-backed queue.
+
+Requirements:
+
+* crash-safe
+* persistent
+* retry support
+* exponential backoff
+* dead-letter handling
+
+Implement:
+
+* enqueue
+* claim
+* acknowledge
+* fail
+
+File watcher:
+
+* fsnotify
+* recursive watching
+* event debouncing
+
+Workflow:
+
+1. Detect change.
+2. Create queue item.
+3. Process queue item.
+4. Trigger incremental indexing.
+
+Acceptance Criteria:
+
+* Survives crashes and resumes correctly.
+
+⸻
+
+PHASE 8 - MCP SERVER
+
+Implement JSON-RPC 2.0.
+
+Support:
+
+* stdio
+* streamable HTTP
+* HTTPS
+
+All tools must be stateless.
+
+Do NOT maintain mutable branch state.
+
+Every tool must accept:
+
+* repository
+* branch
+
+where applicable.
+
+⸻
+
+MCP TOOLS
+
+Repository
+
+* register_repository
+* remove_repository
+* list_repositories
+* repository_status
+
+Indexing
+
+* index_repository
+* reindex_repository
+* refresh_repository
+* index_status
+
+Branch
+
+* list_branches
+
+Files
+
+* file_exists
+* get_file
+* get_file_metadata
+* find_files
+* list_directory
+* get_directory_tree
+
+Symbols
+
+* symbol_exists
+* find_symbol
+* get_symbol
+* get_symbol_definition
+* list_symbols_in_file
+* list_symbols_by_type
+
+Relationships
+
+* find_callers
+* find_callees
+* find_implementations
+* find_inheritance_tree
+* find_dependency_chain
+
+Git
+
+* get_commit
+* get_commit_history
+* get_file_history
+* get_recent_changes
+* compare_branches
+
+Intelligence
+
+* find_hotspots
+* find_most_modified_files
+* find_files_changed_by_author
+* find_symbols_changed_by_author
+* get_ownership_analysis
+* get_churn_analysis
+* get_branch_divergence
+
+LLM Optimized
+
+* explain_symbol
+* get_change_context
+* impact_analysis
+
+⸻
+
+MCP RESPONSE DESIGN
+
+All responses must:
+
+* Be structured JSON.
+* Be deterministic.
+* Be optimized for LLM consumption.
+
+Include whenever applicable:
+
+* Repository
+* Branch
+* Snapshot ID
+* Commit SHA
+* File Path
+* Symbol Name
+* Symbol Type
+* Line Numbers
+* Related Symbols
+
+⸻
+
+PHASE 9 - OBSERVABILITY
+
+Implement:
+
+* slog logging
+* metrics
+* health checks
+* repository status
+* queue status
+* indexing status
+
+Metrics:
+
+* queue depth
+* indexing duration
+* repository count
+* symbol count
+* relationship count
+
+Acceptance Criteria:
+
+* Metrics visible during operation.
+
+⸻
+
+PHASE 10 - TESTING
+
+Implement:
+
+* Unit tests
+* Integration tests
+* SQLite tests
+* Git fixture tests
+* Tree-sitter tests
+* MCP protocol tests
+
+Create repositories containing:
+
+* Multiple branches
+* Large histories
+* Multiple languages
+
+Acceptance Criteria:
+
+* Full test suite passes.
+
+⸻
+
+PHASE 11 - FUTURE SEMANTIC EXTENSION
+
+Do NOT implement semantic indexing.
+
+Create extension points only.
+
+Define:
+
+type SemanticProvider interface {
+    Index(ctx context.Context, repositoryID string) error
+    Search(ctx context.Context, query string) ([]Result, error)
+}
+
+The architecture must allow future:
+
+* Embeddings
+* Vector databases
+* Semantic search
+
+without redesigning core components.
+
+Acceptance Criteria:
+
+* Semantic indexing can be added without schema redesign.
+
+⸻
+
+PHASE 12 - PACKAGING AND DOCUMENTATION
+
+Produce:
+
+* Single binary
+* Cross-platform builds
+* Build scripts
+* Architecture documentation
+* ERD diagrams
+* Configuration reference
+* Quickstart guide
+* Enterprise rollout guide
+
+Acceptance Criteria:
+
+* Fresh clone builds successfully.
+* Documentation is sufficient for deployment.
+
+⸻
+
+PERFORMANCE TARGETS
+
+Repository Size:
+
+* 1,000,000+ LOC
+* 100,000+ symbols
+* 100,000+ commits
+
+Performance:
+
+* Typical query latency <100ms
+* Incremental updates preferred after first index
+
+Memory:
+
+* <1GB resident memory
+
+⸻
+
+ORCHESTRATION REQUIREMENTS
+
+You are responsible for:
+
+* Decomposing work into sub-agent tasks.
+* Coordinating execution.
+* Reviewing outputs.
+* Rejecting incomplete implementations.
+* Ensuring architectural consistency.
+* Verifying acceptance criteria before advancing phases.
+
+After each phase:
+
+1. Run tests.
+2. Validate acceptance criteria.
+3. Commit working state.
+4. Produce a completion report.
+
+Do not proceed to the next phase until the current phase has been accepted.
+
+⸻
+
+FINAL DELIVERABLES
+
+Provide:
+
+1. Complete Go source code.
+2. SQLite schema.
+3. Tree-sitter integration.
+4. Repository graph engine.
+5. Git history indexing engine.
+6. Repository intelligence engine.
+7. Persistent queue.
+8. File watcher.
+9. MCP server.
+10. Tests.
+11. Build system.
+12. Documentation.
+
+The final system must function as a production-grade Repository Intelligence MCP Server and serve as the primary repository intelligence source for AI coding agents.
