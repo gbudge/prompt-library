@@ -42,6 +42,7 @@ Requirements:
 
 Example:
 
+```
 Application
  ├── Configuration
  ├── Logging
@@ -51,6 +52,7 @@ Application
  ├── Indexer
  ├── Scheduler
  └── Workers
+```
 
 All modules use the same logging subsystem.
 
@@ -60,40 +62,52 @@ All modules use the same logging subsystem.
 
 Support:
 
+```
 TRACE
 DEBUG
 INFO
 WARN
 ERROR
+```
 
 Level hierarchy:
 
+```
 TRACE > DEBUG > INFO > WARN > ERROR
+```
 
 Examples:
 
+```
 TRACE = highly verbose diagnostics
 DEBUG = developer troubleshooting
 INFO  = normal operational events
 WARN  = unexpected but recoverable conditions
 ERROR = failures requiring attention
+```
 
 Filtering must occur centrally.
 
 Examples:
 
+```
 LOG_LEVEL=INFO
+```
 
 Produces:
 
+```
 INFO
 WARN
 ERROR
+```
 
 but suppresses:
 
+```
 TRACE
 DEBUG
+```
 
 ⸻
 
@@ -101,20 +115,26 @@ DEBUG
 
 Configuration must be loaded in the following precedence order:
 
+```
 1. Command-line arguments
 2. Environment variables
 3. .env file
 4. Application defaults
+```
 
 Later sources are overridden by earlier sources.
 
 Example:
 
+```bash
 app --log-level debug
+```
 
 must override:
 
+```env
 LOG_LEVEL=info
+```
 
 ⸻
 
@@ -122,12 +142,14 @@ LOG_LEVEL=info
 
 Support at minimum:
 
+```env
 LOG_LEVEL=info
 LOG_OUTPUT=console
 LOG_FILE=logs/application.log
 LOG_FORMAT=text
 LOG_CONSOLE=true
 LOG_FILE_ENABLED=false
+```
 
 Additional variables may be added if beneficial.
 
@@ -139,17 +161,21 @@ Provide startup arguments.
 
 Minimum requirements:
 
+```bash
 --log-level
 --log-output
 --log-file
 --log-format
+```
 
 Examples:
 
+```bash
 app --log-level debug
 app --log-level trace --log-output console
 app --log-output file --log-file ./logs/app.log
 app --log-output both
+```
 
 ⸻
 
@@ -157,19 +183,25 @@ app --log-output both
 
 Support:
 
-Console
+**Console**
 
+```
 stdout/stderr
+```
 
-File
+**File**
 
 Write to:
 
+```
 configurable path
+```
 
 Example:
 
+```env
 LOG_FILE=logs/app.log
+```
 
 Requirements:
 
@@ -177,17 +209,19 @@ Requirements:
 * Handle missing directories gracefully.
 * Fail with clear errors if file cannot be opened.
 
-Dual Output
+**Dual Output**
 
 Support:
 
-console + file
-
-simultaneously.
+```
+console + file simultaneously.
+```
 
 Example:
 
+```env
 LOG_OUTPUT=both
+```
 
 ⸻
 
@@ -195,30 +229,38 @@ LOG_OUTPUT=both
 
 Support at least:
 
-Text Format
+**Text Format**
 
 Example:
 
+```
 2026-06-20T10:15:23Z INFO api.server Request completed
+```
 
-Structured JSON Format
+**Structured JSON Format**
 
 Example:
 
+```json
 {
   "timestamp": "2026-06-20T10:15:23Z",
   "level": "INFO",
   "component": "api.server",
   "message": "Request completed"
 }
+```
 
 Configuration:
 
+```env
 LOG_FORMAT=text
+```
 
 or
 
+```env
 LOG_FORMAT=json
+```
 
 ⸻
 
@@ -228,6 +270,7 @@ Support named loggers.
 
 Examples:
 
+```
 api.server
 database
 scheduler
@@ -235,12 +278,15 @@ mcp
 indexer
 github
 worker
+```
 
 Usage:
 
+```
 [api.server]
 [database]
 [indexer]
+```
 
 This enables tracing issues to specific components.
 
@@ -252,18 +298,22 @@ Support structured fields.
 
 Examples:
 
+```
 repository=my-repo
 branch=main
 commit=abc123
 request_id=xyz789
+```
 
 Example JSON:
 
+```json
 {
   "repository": "my-repo",
   "branch": "main",
   "request_id": "xyz789"
 }
+```
 
 Fields should be attachable without string concatenation.
 
@@ -273,14 +323,18 @@ Fields should be attachable without string concatenation.
 
 Support:
 
+```
 message
 error object
 stack trace (where available)
+```
 
 Example:
 
+```
 ERROR failed to open database
 error="permission denied"
+```
 
 ⸻
 
@@ -290,11 +344,13 @@ At application startup emit configuration information.
 
 Example:
 
+```
 Logging initialized
 Level=DEBUG
 Output=BOTH
 Format=JSON
 File=logs/app.log
+```
 
 This should occur once after configuration is finalized.
 
@@ -330,6 +386,7 @@ Provide concise usage examples.
 
 Example:
 
+```go
 logger := logging.GetLogger("database")
 logger.Debug("opening connection")
 logger.Info(
@@ -337,13 +394,16 @@ logger.Info(
     "repository", repo,
     "branch", branch,
 )
+```
 
 Error example:
 
+```go
 logger.Error(
     "database query failed",
     "error", err,
 )
+```
 
 ⸻
 
